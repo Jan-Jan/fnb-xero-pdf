@@ -1,6 +1,6 @@
 {
-  "name": "fnb-xero",
-  "version": "1.0.0",
+  "name": "fnb-xero-pdf",
+  "version": "0.1.0",
   "description": "",
   "main": "index.js",
   "scripts": {
