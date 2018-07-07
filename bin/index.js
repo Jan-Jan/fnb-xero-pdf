@@ -25,10 +25,10 @@ const months = Object.keys(monthDigits);
 
 const header = ['*Date,*Amount,Description,Reference']
 
-const reDate = /Statement Date[\ :]+(\d\d) ([a-z]+) (\d\d\d\d)/i
+const reDate = /statement date[\s:]+(\d+) ([a-z]+) (\d\d\d\d)/i
 //const reTransaction = /\s*([0-9]{2}\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec))\s+([\#\*\-\@\.\/\,\:\&\(\)\'\w\s]+)\s\s+([0-9]*[\s\,]{0,1}[0-9]{1,3}\.[0-9]{2}\s{0,1}[Cr]{0,2})+/
 const reTransaction = /^\s*([0-9]{2}\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec))\s+([\S*\s]*)\s\s+([0-9]*[\s\,]{0,1}[0-9]{1,3}\.[0-9]{2}\s{0,1}[Cr]{0,2})+/
-const reAccountNumber = /(cheque\sacc|account\snumber|account|credit\scard)\s+([0-9\s]+)/i
+const reAccountNumber = /(cheque\sacc|account\snumber|account|credit\scard|pocket\s+:)\s+([0-9\s]+)/i
 const reStartsWithDate = /^\s*([0-9]{2}\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec))\s/
 const reContainsAmount = /([0-9]*[\s\,]{0,1}[0-9]{1,3}\.[0-9]{2}\s{0,1}[Cr]{0,2})+/
 // const reDateThenDescription = /^\s*([0-9]{2}\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec))\s+([\#\*\-\@\.\/\,\:\w\s]+)/
@@ -73,11 +73,14 @@ async.eachSeries(filePaths, (filePath, callback) => {
     const lines = text.join('\n').split('\n')
 
     const dateLine = lines.find(line => line.match(reDate))
+    if (!dateLine) {
+      throw new Error(`No date found in "${filePath}".`)
+    }
     const { year, month, day } = extractDate(dateLine)
 
     const accountNumberLine = lines.find(line => line.match(reAccountNumber))
     if (!accountNumberLine) {
-      throw new Error('No account number found.')
+      throw new Error(`No account number found in "${filePath}"`)
     }
     const accountNumber = extractAccountNumber(accountNumberLine)
 
