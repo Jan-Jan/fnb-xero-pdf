@@ -2,7 +2,9 @@
   "name": "fnb-xero-pdf",
   "version": "0.2.0",
   "description": "",
-  "main": "index.js",
+  "bin": {
+    "fnb-xero-pdf": "./bin/index.js"
+  },
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
   },
