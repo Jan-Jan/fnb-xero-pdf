@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 
+const async = require('async')
+const chalk = require('chalk')
+const extract = require('pdf-text-extract')
 const fs = require('fs')
 const path = require('path')
-const extract = require('pdf-text-extract')
-const async = require('async')
 // load all pdfs
 
 const monthDigits = {
@@ -30,8 +31,11 @@ const reDate = /statement date[\s:]+(\d+) ([a-z]+) (\d\d\d\d)/i
 const reTransaction = /^\s*([0-9]{2}\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec))\s+([\S*\s]*)\s\s+([0-9]*[\s\,]{0,1}[0-9]{1,3}\.[0-9]{2}\s{0,1}[Cr]{0,2})+/
 const reAccountNumber = /(cheque\sacc|account\snumber|account|credit\scard|pocket\s+:)\s+([0-9\s]+)/i
 const reStartsWithDate = /^\s*([0-9]{2}\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec))\s/
-const reContainsAmount = /([0-9]*[\s\,]{0,1}[0-9]{1,3}\.[0-9]{2}\s{0,1}[Cr]{0,2})+/
+const reContainsAmount = /([0-9]*[\s\,]{0,1}[0-9]{1,3}\.[0-9]{2}\s{0,1}[Cr]{0,2})+/g
+const reContainsDoubleAmount = /\s{5}([0-9]*[\s\,]{0,1}[0-9]{1,3}\.[0-9]{2}\s{0,1}[Cr]{0,2})\s+([0-9]*[\s\,]{0,1}[0-9]{1,3}\.[0-9]{2}\s{0,1}[Cr]{0,2})/
 // const reDateThenDescription = /^\s*([0-9]{2}\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec))\s+([\#\*\-\@\.\/\,\:\w\s]+)/
+const reOpeningBalance = /^\s*(Opening\sBalance|Balance\sBrought\sForward)/
+const reClosingBalance = /^\s*(Closing\sBalance|Amount\sOwing)/
 
 const extractDate = line => {
 
@@ -46,6 +50,17 @@ const extractAccountNumber = line => {
 
   const match = line.match(reAccountNumber)
   return match[2].replace(/(\s\s+)/g, ',').split(',')[0]
+}
+
+const amountify = amount =>
+  amount.slice(-2) === `Cr`
+    ? `${amount.match(/[0-9]+[0-9\.\s\,]+[0-9]{2}/)[0].replace(/[\s\,]/g, '')}`
+    : `-${amount.replace(/[\s\,]/g, '')}`
+
+const extractAmount = line => {
+
+  const containsAmount = line.match(reContainsAmount)
+  return Number(amountify(containsAmount[0]))
 }
 
 const convertTransactionDate = date => {
@@ -63,6 +78,8 @@ if (filePaths.length === 0) {
 }
 
 async.eachSeries(filePaths, (filePath, callback) => {
+
+  console.log(`processing "${filePath}"...`)
 
   extract(filePath, { splitPages: false }, function (err, text) {
     if (err) {
@@ -84,10 +101,24 @@ async.eachSeries(filePaths, (filePath, callback) => {
     }
     const accountNumber = extractAccountNumber(accountNumberLine)
 
+    const openingBalanceLine = lines.find(line => line.match(reOpeningBalance))
+    if (!openingBalanceLine) {
+      throw new Error(`No "Opening Balance" found in "${filePath}"`)
+    }
+    const openingBalance = extractAmount(openingBalanceLine)
+
+    const closingBalanceLine = lines.find(line => line.match(reClosingBalance))
+    if (!closingBalanceLine) {
+      throw new Error(`No "Closing Balance" found in "${filePath}"`)
+    }
+    const closingBalance = extractAmount(closingBalanceLine)
+
+    let balance = 0
+
     const transactions = lines
       .map(line => {
         const startsWithDate = line.match(reStartsWithDate)
-        const containsAmount = line.match(reContainsAmount)
+        const containsAmount = line.match(reContainsDoubleAmount)
         const match = line.match(reTransaction)
 
         if (startsWithDate && containsAmount && !match) {
@@ -99,21 +130,23 @@ async.eachSeries(filePaths, (filePath, callback) => {
         }
 
         if (match) {
+          const amount = containsAmount
+            ? containsAmount[1]
+            : line.match(reContainsAmount).slice(-1)[0]
+          //console.error(`"${line}"\t\t${amount}`)
           const reg = {
             month: match[2],
             date: match[1],
             description: match[3],
-            amount: containsAmount[1]
+            amount
           }
 
           // console.log(`IS  transaction =`, line)
           // handle year change over Dec-Jan
           const tYear = month === 'Jan' && reg.month === 'Dec' ? Number(year) - 1 : year
           const tDate = `${tYear}/${convertTransactionDate(reg.date)}`
-          // if amount has trailing `Cr` it is positive (&& remove `Cr`) else negative
-          const tAmount = reg.amount.slice(-2) === `Cr`
-            ? `${reg.amount.match(/[0-9]+[0-9\.\s\,]+[0-9]{2}/)[0].replace(/[\s\,]/g, '')}`
-            : `-${reg.amount.replace(/[\s\,]/g, '')}`
+          const tAmount = amountify(reg.amount)
+          balance += Number(tAmount)
           // keep only the first description, scrap the rest
           const tDescriptionPlus = reg.description.replace(/(\s\s+)/g, ',')
             .split(',')
@@ -127,6 +160,11 @@ async.eachSeries(filePaths, (filePath, callback) => {
       .filter(line => line)
       .sort()
 
+    const delta = Math.abs(balance - (closingBalance - openingBalance))
+    if (delta > 0.001) {
+      console.error(chalk.red(`${filePath}: balance difference of ${delta}\n${closingBalance} - ${openingBalance} = ${closingBalance - openingBalance} instead of ${balance} derived from transactions`))
+    }
+
     const filename = filePaths.length === 1
       ? `${filePath.slice(0,-3)}csv`
       : `${accountNumber}.csv`
@@ -136,7 +174,7 @@ async.eachSeries(filePaths, (filePath, callback) => {
       ? transactions.join('\n')+'\n'
       : header.concat(transactions).join('\n')+'\n'
 
-    console.log(`Processing ${filePath} -> ${filename}`)
+    console.log(`\t... into "${filename}"`)
 
     const asyncWrite = filePaths.length === 1
       ? fs.writeFile // overwite if only 1 file
@@ -153,5 +191,5 @@ async.eachSeries(filePaths, (filePath, callback) => {
     } else {
       console.log('All files have been processed successfully');
     }
-})
+  })
 })
